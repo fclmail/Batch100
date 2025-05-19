@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Polygon Batch Buy/Sell</title>
+  <script src="https://cdn.jsdelivr.net/npm/ethers@6.7.0/dist/ethers.min.js"></script>
+</head>
+<body style="background:#001f3f;color:white;font-family:sans-serif;padding:20px;">
+  <h2>Polygon Batch Buy/Sell Interface</h2>
+  
+  <div>
+    <label>Token Address:</label><input id="tokenAddress" style="width:400px;"><br><br>
+    <label>Buy DEX:</label>
+    <select id="buyDex">
+      <option value="quickswap">QuickSwap</option>
+      <option value="sushiswap">SushiSwap</option>
+    </select>
+    <label>Sell DEX:</label>
+    <select id="sellDex">
+      <option value="quickswap">QuickSwap</option>
+      <option value="sushiswap">SushiSwap</option>
+    </select><br><br>
+
+    <label>Amount in USDC:</label><input id="usdcAmount" type="number" step="0.01" value="1">
+    <label>Batch Count (0–100):</label><input id="batchCount" type="number" value="1" max="100" min="0"><br><br>
+
+    <button onclick="startBatch()">Start Batch Trade</button><br><br>
+
+    <div id="status">Status: Not started</div><br>
+    <div id="balances">Balances will appear here...</div>
+  </div>
+
+  <script>
+    const USDC = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"; // USDC on Polygon
+    const QUICKSWAP_ROUTER = "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff";
+    const SUSHISWAP_ROUTER = "0x1b02da8cb0d097eb8d57a175b88c7d8b47997506";
+
+    const ABI = [
+      "function balanceOf(address owner) view returns (uint)",
+      "function approve(address spender, uint value) returns (bool)",
+      "function decimals() view returns (uint8)",
+      "function symbol() view returns (string)",
+      "function allowance(address owner, address spender) view returns (uint)",
+    ];
+
+    const ROUTER_ABI = [
+      "function getAmountsOut(uint amountIn, address[] memory path) public view returns (uint[] memory amounts)",
+      "function swapExactTokensForTokens(uint amountIn, uint amountOutMin, address[] calldata path, address to, uint deadline) external returns (uint[] memory amounts)"
+    ];
+
+    let provider, signer, address;
+
+    async function connectWallet() {
+      provider = new ethers.BrowserProvider(window.ethereum);
+      signer = await provider.getSigner();
+      address = await signer.getAddress();
+      document.getElementById("status").innerText = "Wallet: " + address;
+    }
+
+    async function getRouter(name) {
+      const addr = name === "quickswap" ? QUICKSWAP_ROUTER : SUSHISWAP_ROUTER;
+      return new ethers.Contract(addr, ROUTER_ABI, signer);
+    }
+
+    async function startBatch() {
+      await connectWallet();
+
+      const tokenAddress = document.getElementById("tokenAddress").value.trim();
+      const buyDex = document.getElementById("buyDex").value;
+      const sellDex = document.getElementById("sellDex").value;
+      const batchCount = parseInt(document.getElementById("batchCount").value);
+      const usdcAmount = parseFloat(document.getElementById("usdcAmount").value);
+
+      const usdc = new ethers.Contract(USDC, ABI, signer);
+      const token = new ethers.Contract(tokenAddress, ABI, signer);
+      const tokenSymbol = await token.symbol();
+
+      const usdcDecimals = await usdc.decimals();
+      const tokenDecimals = await token.decimals();
+
+      const routerBuy = await getRouter(buyDex);
+      const routerSell = await getRouter(sellDex);
+
+      const amountIn = ethers.parseUnits(usdcAmount.toString(), usdcDecimals);
+
+      // Approve both routers
+      await usdc.approve(routerBuy.target, amountIn * BigInt(batchCount));
+      await token.approve(routerSell.target, ethers.MaxUint256);
+
+      for (let i = 0; i < batchCount; i++) {
+        document.getElementById("status").innerText = `Batch ${i + 1} BUYING...`;
+        const buyPath = [USDC, tokenAddress];
+        const sellPath = [tokenAddress, USDC];
+
+        // Get estimated output
+        const amountsOut = await routerBuy.getAmountsOut(amountIn, buyPath);
+        const minOut = amountsOut[1] * BigInt(9999)n / BigInt(10000); // 0.01% slippage
+
+        const txBuy = await routerBuy.swapExactTokensForTokens(
+          amountIn,
+          minOut,
+          buyPath,
+          address,
+          Math.floor(Date.now() / 1000) + 60
+        );
+        await txBuy.wait();
+
+        document.getElementById("status").innerText = `Batch ${i + 1} SELLING...`;
+
+        // Wait for token to arrive
+        let balance;
+        while (true) {
+          balance = await token.balanceOf(address);
+          if (balance > 0n) break;
+          await new Promise(r => setTimeout(r, 500));
+        }
+
+        const amountsOutSell = await routerSell.getAmountsOut(balance, sellPath);
+        const minSellOut = amountsOutSell[1] * BigInt(9999)n / BigInt(10000);
+
+        const txSell = await routerSell.swapExactTokensForTokens(
+          balance,
+          minSellOut,
+          sellPath,
+          address,
+          Math.floor(Date.now() / 1000) + 60
+        );
+        await txSell.wait();
+
+        document.getElementById("status").innerText = `Batch ${i + 1} completed.`;
+        await updateBalances(token, tokenSymbol);
+      }
+    }
+
+    async function updateBalances(token, symbol) {
+      const usdc = new ethers.Contract(USDC, ABI, provider);
+      const usdcBal = await usdc.balanceOf(address);
+      const tokenBal = await token.balanceOf(address);
+
+      const usdcDec = await usdc.decimals();
+      const tokenDec = await token.decimals();
+
+      document.getElementById("balances").innerText =
+        `USDC: ${ethers.formatUnits(usdcBal, usdcDec)} | ` +
+        `${symbol}: ${ethers.formatUnits(tokenBal, tokenDec)}`;
+    }
+  </script>
+</body>
+</html>
