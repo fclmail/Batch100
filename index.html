@@ -7,6 +7,9 @@
 <body style="background:#001f3f;color:white;font-family:sans-serif;padding:20px;">
   <h2>Polygon Batch Buy/Sell Interface</h2>
   
+  <button onclick="connectWallet()" style="padding:10px;margin-bottom:10px;">Connect MetaMask</button>
+  <div id="status">Status: Not connected</div><br>
+
   <div>
     <label>Token Address:</label><input id="tokenAddress" style="width:400px;"><br><br>
     <label>Buy DEX:</label>
@@ -25,7 +28,6 @@
 
     <button onclick="startBatch()">Start Batch Trade</button><br><br>
 
-    <div id="status">Status: Not started</div><br>
     <div id="balances">Balances will appear here...</div>
   </div>
 
@@ -50,10 +52,20 @@
     let provider, signer, address;
 
     async function connectWallet() {
-      provider = new ethers.BrowserProvider(window.ethereum);
-      signer = await provider.getSigner();
-      address = await signer.getAddress();
-      document.getElementById("status").innerText = "Wallet: " + address;
+      if (!window.ethereum) {
+        alert("MetaMask is not installed!");
+        return;
+      }
+      try {
+        provider = new ethers.BrowserProvider(window.ethereum);
+        await provider.send("eth_requestAccounts", []);
+        signer = await provider.getSigner();
+        address = await signer.getAddress();
+        document.getElementById("status").innerText = "Wallet: " + address;
+      } catch (err) {
+        console.error(err);
+        document.getElementById("status").innerText = "Connection failed.";
+      }
     }
 
     async function getRouter(name) {
@@ -62,7 +74,9 @@
     }
 
     async function startBatch() {
-      await connectWallet();
+      if (!signer || !address) {
+        await connectWallet();
+      }
 
       const tokenAddress = document.getElementById("tokenAddress").value.trim();
       const buyDex = document.getElementById("buyDex").value;
@@ -91,9 +105,8 @@
         const buyPath = [USDC, tokenAddress];
         const sellPath = [tokenAddress, USDC];
 
-        // Get estimated output
         const amountsOut = await routerBuy.getAmountsOut(amountIn, buyPath);
-        const minOut = amountsOut[1] * BigInt(9999)n / BigInt(10000); // 0.01% slippage
+        const minOut = amountsOut[1] * BigInt(9999n) / BigInt(10000); // 0.01% slippage
 
         const txBuy = await routerBuy.swapExactTokensForTokens(
           amountIn,
@@ -115,7 +128,7 @@
         }
 
         const amountsOutSell = await routerSell.getAmountsOut(balance, sellPath);
-        const minSellOut = amountsOutSell[1] * BigInt(9999)n / BigInt(10000);
+        const minSellOut = amountsOutSell[1] * BigInt(9999n) / BigInt(10000);
 
         const txSell = await routerSell.swapExactTokensForTokens(
           balance,
